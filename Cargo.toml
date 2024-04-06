@@ -1,0 +1,13 @@
+[package]
+name = "rp2040_tiny_i2c_serial"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rp2040-hal = "0.9.2"
+embedded-hal = "1.0.0"
+usb-device = "0.2.9"  # 0.2.9 is the latest version that works with rp2040-hal 0.9.2
+panic-halt = "0.2.0"
+rp-pico = "0.8.0"
+cortex-m-rt = "0.7.3"
+usbd-serial = "0.1.1"
