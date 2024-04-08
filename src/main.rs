@@ -20,7 +20,10 @@ use embedded_graphics::{
 };
 use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
-const TUSB_CLASS_MISC: u8 = 0xEF;
+const USB_CLASS_MISC: u8 = 0xEF;
+const USB_CLASS_CDC: u8 = 0x02;
+
+const VENDOR_ID: u16 = 0x0403;
 
 struct TinyI2C {
     // fields for your custom class
@@ -37,7 +40,43 @@ impl UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C {
     fn reset(&mut self) {}
 
     // Called whenever the `UsbDevice` is polled.
-    fn poll(&mut self) {}
+    fn poll(&mut self) {
+    }
+    
+    // out == host to device
+    fn control_out(&mut self, xfer: ControlOut<'_, '_, '_, UsbBus>) {
+        let req = xfer.request();
+        match (req.request_type, req.request, req.value) {
+            (control::RequestType::Vendor, _, VENDOR_ID) => {
+                let data = xfer.data();
+                xfer.accept();
+
+            },
+            (control::RequestType::Class, USB_CLASS_CDC, _) => {},
+            _ => {}
+        }
+
+    }
+
+    // in == device to host
+    fn control_in(&mut self, xfer: ControlIn<'_, '_, '_, UsbBus>) {
+        // Match on the setup packet to identify the request.
+        let req = xfer.request();
+        match (req.request_type, req.request, req.value) {
+            // Example: Custom request type & request code for I2C read
+            (control::RequestType::Vendor, _, VENDOR_ID) => {
+                xfer.accept(|buf| {
+                    // if data.len() > buf.len() {
+                    //     return Err(UsbError::BufferOverflow);
+                    // }
+                    // buf[..data.len()].copy_from_slice(data);
+                    Ok(0/*data.len()*/)
+                });
+            },
+            (control::RequestType::Class, USB_CLASS_CDC, _) => {},
+            _ => {}
+        }
+    }
 }
 
 /// External high-speed crystal on the Raspberry Pi Pico board is 12 MHz. Adjust
@@ -73,7 +112,7 @@ unsafe fn main() -> ! {
     // let mut cdc_dev = SerialPort::new(&usb_bus);
     let mut tiny_i2c = TinyI2C::new(&usb_bus);
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, tiny_usb_id)
-        .device_class(TUSB_CLASS_MISC)
+        .device_class(USB_CLASS_MISC)
         .manufacturer("Guillaume Binet")
         .product("I2C adapter")
         .serial_number("12345678")
