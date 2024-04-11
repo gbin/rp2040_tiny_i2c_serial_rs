@@ -120,21 +120,44 @@ bitflags::bitflags! {
 }
 
 enum TinyI2CRequest {
-    CmdEcho,
-    CmdGetFunc,
-    CmdSetDelay,
-    CmdGetStatus,
-    CmdI2CIO,
+    Echo,
+    GetFunc,
+    SetDelay,
+    GetStatus,
+    IO,
+    IOBegin,
+    IOEnd,
+    IOBeginEnd,
 }
 
 impl TinyI2CRequest {
     fn from_ordinal(ordinal: u8) -> Option<Self> {
         match ordinal {
-            0 => Some(Self::CmdEcho),
-            1 => Some(Self::CmdGetFunc),
-            2 => Some(Self::CmdSetDelay),
-            3 => Some(Self::CmdGetStatus),
-            4 => Some(Self::CmdI2CIO),
+            0 => Some(Self::Echo),
+            1 => Some(Self::GetFunc),
+            2 => Some(Self::SetDelay),
+            3 => Some(Self::GetStatus),
+            4 => Some(Self::IO),
+            5 => Some(Self::IOBegin),
+            6 => Some(Self::IOEnd),
+            7 => Some(Self::IOBeginEnd),
+            _ => None,
+        }
+    }
+}
+
+enum TinyI2CStatus {
+    Idle,
+    AddressAck,
+    AddressNak,
+}
+
+impl TinyI2CStatus {
+    fn from_ordinal(ordinal: u8) -> Option<Self> {
+        match ordinal {
+            0 => Some(Self::Idle),
+            1 => Some(Self::AddressAck),
+            2 => Some(Self::AddressNak),
             _ => None,
         }
     }
@@ -200,7 +223,7 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
     // out == host to device
     fn control_out(&mut self, xfer: ControlOut<'_, '_, '_, UsbBus>) {
         let req = xfer.request();
-        self.clear();
+         // self.display_1(format!("CO:{:x}", req.request).as_str());
         // self.display_1(format!("T:{:?}", req.request_type).as_str());
         // self.display_2(format!("V:{:x}", req.value).as_str());
         // self.display_3(format!("I:{:x}", req.index).as_str());
@@ -212,20 +235,21 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
         } else {
             return;
         };
-        match (i2creq, req.value) {
-            (TinyI2CRequest::CmdSetDelay, value) => {
+        match (i2creq, req.value, req.index, req.length) {
+            (TinyI2CRequest::SetDelay, value, _, _) => {
                 //info!("Set delay to {}", delay);
+                self.clear();
                 self.display_2(format!("Delay {}", value).as_str());
                 xfer.accept().unwrap();
             }
-            (TinyI2CRequest::CmdEcho, value) => {
+            (TinyI2CRequest::Echo, value, _, _) => {
                 // info!("Echo {}", data[1]);
                 self.display_2(format!("E {}", value).as_str());
                 xfer.accept().unwrap();
             }
-            (TinyI2CRequest::CmdI2CIO, value) => {
-                // // info!("I2C IO: addr: 0x{:02x}, len: {}, data: {:?}", i2c_addr, i2c_len, i2c_data);
-                self.display_3(format!("IO: {:?}", xfer.data()).as_str());
+            (TinyI2CRequest::IOBeginEnd, flags, addr, length) => {
+                // info!("I2C IO: addr: 0x{:02x}, len: {}, data: {:?}", value, i2c_len, i2c_data);
+                self.display_3(format!("O {:x} {:x} {:?}", flags, addr, length).as_str());
                 xfer.accept().unwrap();
             }
             _ => {}
@@ -236,6 +260,9 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
     fn control_in(&mut self, xfer: ControlIn<'_, '_, '_, UsbBus>) {
         // Match on the setup packet to identify the request.
         let req = xfer.request();
+        self.clear();
+        self.display_1(format!("CI:{:x}", req.request).as_str());
+
         if req.request_type != control::RequestType::Vendor {
             return;
         }
@@ -244,26 +271,32 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
         } else {
             return;
         };
-        match (i2creq, req.value) {
-            (TinyI2CRequest::CmdGetFunc, value) => {
+        match (i2creq, req.value, req.index, req.length) {
+            (TinyI2CRequest::GetFunc, value, _, _) => {
                 // info!("GetFunc");
-                self.clear();
-                self.display_2(format!("Fn {}", value).as_str());
                 xfer.accept(|buf| {
                     if buf.len() < 4 {
                         return Err(UsbError::BufferOverflow);
                     }
                     let bytes = I2CFunc::SUPPORTED.bits().to_ne_bytes();
                     buf[..4].copy_from_slice(&bytes);
-                    self.display_2(format!("Fn {:?}", bytes).as_str());
                     Ok(4)
                 }).expect("Errored in accepting request");
             }
-            (TinyI2CRequest::CmdGetStatus, value) => {
+            (TinyI2CRequest::GetStatus, value, _, _) => {
                 //info!("GetStatus");
-                self.display_2(format!("S {}", value).as_str());
+                // self.display_3(format!("S {}", value).as_str());
                 xfer.accept(|buf| {
-                Ok(0)});
+                    buf[0] = TinyI2CStatus::AddressAck as u8;
+                Ok(1)}).expect("Errored in accepting request");;
+            }
+            (TinyI2CRequest::IOBeginEnd, flags, addr, length) => {
+                // info!("I2C IO: addr: 0x{:02x}, len: {}, data: {:?}", value, i2c_len, i2c_data);
+                xfer.accept(|buf| {
+                    //self.display_3(format!("I {:x} {:x} {:?}", flags, addr, length).as_str());
+                    buf[0] = 0x01;
+                    Ok(length as usize)
+                }).expect("Errored in accepting request");
             }
             _ => {}
         }
