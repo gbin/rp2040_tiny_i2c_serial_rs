@@ -9,13 +9,19 @@ name = "rp2040_tiny_i2c_serial_rs"
 doctest = false
 
 [dependencies]
-embedded-hal = "0.2.7"  # 0.2.7 is the latest version that works with rp2040-hal 0.9.2
+embedded-hal = "0.2.7"
 embedded-graphics = "0.8.1"
-rp-pico = "0.8.0"
-usb-device = "0.2.9"  # 0.2.9 is the latest version that works with rp2040-hal 0.9.2
-rp2040-hal = "0.9.2"  # 0.9.2 is the latest version that works with rp-pico 0.8.0
+rp-pico = "0.9.0"
+usb-device = { version= "0.3.2", features = ["log", "defmt"]}
+rp2040-hal = "0.10.0"
 panic-halt = "0.2.0"
+cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 ssd1306 = "0.8.4"
 fugit = "0.3.7"
-# usbd-serial = "0.2.1"
+heapless = "0.8.0"
+usbd-serial = "0.2.1"
+defmt = "0.3.6"
+defmt-serial = "0.8.0"
+nb = "1.1.0"
+bitflags = "2.5.0"
