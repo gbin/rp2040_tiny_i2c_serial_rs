@@ -1,5 +1,5 @@
-#![no_std]
 #![no_main]
+#![no_std]
 use core::cell::UnsafeCell;
 use core::fmt::Write as _;
 use core::panic::PanicInfo;
@@ -29,6 +29,7 @@ use rp2040_hal::pac::I2C1;
 use rp2040_hal::I2C;
 use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
+
 
 // Type definitions to address the screen on the device.
 type DisplaySdaPin = Pin<Gpio22, FunctionI2C, PullUp>;
@@ -288,7 +289,7 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
                 // self.display_3(format!("S {}", value).as_str());
                 xfer.accept(|buf| {
                     buf[0] = TinyI2CStatus::AddressAck as u8;
-                Ok(1)}).expect("Errored in accepting request");;
+                Ok(1)}).expect("Errored in accepting request");
             }
             (TinyI2CRequest::IOBeginEnd, flags, addr, length) => {
                 // info!("I2C IO: addr: 0x{:02x}, len: {}, data: {:?}", value, i2c_len, i2c_data);
@@ -378,11 +379,11 @@ unsafe fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    // Configure two pins as being I²C, not GPIO
+    // Configure two pins as being I²C for the display and Not GPIO
     let sda_pin: DisplaySdaPin = pins.gpio22.reconfigure();
     let scl_pin: DisplaySclPin = pins.gpio23.reconfigure();
 
-    let i2c: DisplayI2CBus = hal::I2C::i2c1(
+    let i2c_display: DisplayI2CBus = hal::I2C::i2c1(
         pac.I2C1,
         sda_pin,
         scl_pin,
@@ -390,7 +391,7 @@ unsafe fn main() -> ! {
         &mut pac.RESETS,
         &clocks.system_clock,
     );
-    let interface: DisplayI2CInterface = I2CDisplayInterface::new(i2c);
+    let interface: DisplayI2CInterface = I2CDisplayInterface::new(i2c_display);
     let mut display: Display = Ssd1306::new(interface, DisplaySize72x40, DisplayRotation::Rotate0)
         .into_buffered_graphics_mode();
     display.init().unwrap();
@@ -398,6 +399,21 @@ unsafe fn main() -> ! {
     let mut tiny_i2c = TinyI2C::new(get_usb_bus(), display);
     // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     // delay.delay_ms(3000);
+    //
+    //
+    
+    // Configure two pins as being I²C, not GPIO
+    let sda_pin: DisplaySdaPin = pins.gpio22.reconfigure();
+    let scl_pin: DisplaySclPin = pins.gpio23.reconfigure();
+    let i2c_bus = hal::I2C::i2c0(
+        pac.I2C0,
+        pins.gpio0.into_mode::<FunctionI2C>(),
+        pins.gpio1.into_mode::<FunctionI2C>(),
+        400.kHz(),
+        &mut pac.RESETS,
+        &clocks.system_clock,
+    );
+    
     info!("TinyI2C ready");
     loop {
         if !usb_dev.poll(&mut [get_serial(), &mut tiny_i2c]) {
@@ -408,6 +424,6 @@ unsafe fn main() -> ! {
 
 #[panic_handler]
 fn panic_handler(_info: &PanicInfo) -> ! {
-    info!("Panicked ... ");
-    loop {}
-}
+     info!("Panicked ... ");
+     loop {}
+ }
