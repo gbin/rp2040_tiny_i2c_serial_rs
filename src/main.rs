@@ -1,12 +1,12 @@
 #![no_main]
 #![no_std]
+use rp2040_hal::pio::PIOExt;
 use core::cell::UnsafeCell;
 use core::fmt::Write as _;
 use core::panic::PanicInfo;
-use embedded_hal::blocking::delay::DelayMs;
 use fugit::RateExtU32;
-use hal::gpio::{FunctionI2C, Pin, PullUp};
-use hal::{clocks::init_clocks_and_plls, pac, usb::UsbBus, watchdog::Watchdog, Clock};
+use hal::gpio::{FunctionI2C, Pin, PullUp, FunctionPio0};
+use hal::{clocks::init_clocks_and_plls, pac, usb::UsbBus, watchdog::Watchdog, Clock, Timer};
 use hal::{gpio::Pins, Sio};
 use heapless::String;
 use rp2040_hal as hal;
@@ -16,6 +16,7 @@ use usb_device::class_prelude::*;
 use usb_device::prelude::*;
 use usbd_serial::embedded_io::Write;
 use usbd_serial::SerialPort;
+use ws2812_pio::Ws2812;
 
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::{
@@ -333,7 +334,6 @@ fn get_serial() -> &'static mut SerialPort<'static, UsbBus> {
 #[entry]
 unsafe fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
 
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
     let clocks = init_clocks_and_plls(
@@ -347,6 +347,29 @@ unsafe fn main() -> ! {
     )
     .ok()
     .unwrap();
+
+    let sio = Sio::new(pac.SIO);
+
+    // Set the pins to their default state
+    let pins = Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
+    
+    // Configure the pin 12 for the RGB led with PIO
+    let led_pin: Pin<_, FunctionPio0, _> = pins.gpio12.into_function();
+    let timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+
+    let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
+    let mut led = Ws2812::new(
+        led_pin,
+        &mut pio,
+        sm0,
+        clocks.peripheral_clock.freq(),
+        timer.count_down(),
+    );
 
     unsafe {
         *USB_BUS.get() = Some(UsbBusAllocator::new(UsbBus::new(
@@ -370,14 +393,7 @@ unsafe fn main() -> ! {
         .unwrap()
         .build();
 
-    let sio = Sio::new(pac.SIO);
-    // Set the pins to their default state
-    let pins = Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
+
 
     // Configure two pins as being I²C for the display and Not GPIO
     let sda_pin: DisplaySdaPin = pins.gpio22.reconfigure();
@@ -402,19 +418,24 @@ unsafe fn main() -> ! {
     //
     //
     
-    // Configure two pins as being I²C, not GPIO
-    let sda_pin: DisplaySdaPin = pins.gpio22.reconfigure();
-    let scl_pin: DisplaySclPin = pins.gpio23.reconfigure();
-    let i2c_bus = hal::I2C::i2c0(
-        pac.I2C0,
-        pins.gpio0.into_mode::<FunctionI2C>(),
-        pins.gpio1.into_mode::<FunctionI2C>(),
-        400.kHz(),
-        &mut pac.RESETS,
-        &clocks.system_clock,
-    );
+    // Configure the second I2c two pins as being I²C, not GPIO
+    // let i2c_bus = hal::I2C::i2c0(
+    //     pac.I2C0,
+    //     pins.gpio0.into_mode::<FunctionI2C>(),
+    //     pins.gpio1.into_mode::<FunctionI2C>(),
+    //     400.kHz(),
+    //     &mut pac.RESETS,
+    //     &clocks.system_clock,
+    // );
     
     info!("TinyI2C ready");
+    {
+     use smart_leds_trait::{SmartLedsWrite, RGB8};
+     let color : RGB8 = (255, 0, 255).into();
+      led.write([color].iter().cloned()).unwrap();
+    }
+
+
     loop {
         if !usb_dev.poll(&mut [get_serial(), &mut tiny_i2c]) {
             continue;
