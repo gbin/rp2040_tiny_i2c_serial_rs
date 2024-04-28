@@ -1,21 +1,33 @@
 #![no_main]
 #![no_std]
-use rp2040_hal::pio::PIOExt;
+
 use core::cell::UnsafeCell;
 use core::fmt::Write as _;
 use core::panic::PanicInfo;
+
 use fugit::RateExtU32;
+use heapless::String;
+
+use rp2040_hal as hal;
+use hal::I2C;
+use hal::pac::I2C1;
 use hal::gpio::{FunctionI2C, Pin, PullUp, FunctionPio0};
+use embedded_hal::blocking::i2c::{Write as I2CWrite, WriteRead};
+use embedded_hal::blocking::i2c::Read as I2CRead;
+use hal::gpio::bank0::{Gpio5, Gpio4, Gpio22, Gpio23};
+use hal::pio::PIOExt;
 use hal::{clocks::init_clocks_and_plls, pac, usb::UsbBus, watchdog::Watchdog, Clock, Timer};
 use hal::{gpio::Pins, Sio};
-use heapless::String;
-use rp2040_hal as hal;
+
 use rp_pico::entry;
+
 use usb_device::bus::UsbBusAllocator;
 use usb_device::class_prelude::*;
 use usb_device::prelude::*;
-use usbd_serial::embedded_io::Write;
+
+use usbd_serial::embedded_io::Write as USBWrite;
 use usbd_serial::SerialPort;
+
 use ws2812_pio::Ws2812;
 
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -25,12 +37,11 @@ use embedded_graphics::{
     prelude::*,
     text::{Baseline, Text},
 };
-use rp2040_hal::gpio::bank0::{Gpio22, Gpio23};
-use rp2040_hal::pac::I2C1;
-use rp2040_hal::I2C;
+
 use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
+use vl53l0x::VL53L0x;
 
 // Type definitions to address the screen on the device.
 type DisplaySdaPin = Pin<Gpio22, FunctionI2C, PullUp>;
@@ -40,6 +51,11 @@ type DisplayI2CInterface = I2CInterface<DisplayI2CBus>;
 type DisplaySize = DisplaySize72x40;
 type DisplayMode = BufferedGraphicsMode<DisplaySize>;
 type Display = Ssd1306<DisplayI2CInterface, DisplaySize, DisplayMode>;
+
+// type definition for the slave i2c bus we want to control from the host
+type SlaveSdaPin = Pin<Gpio4, FunctionI2C, PullUp>;
+type SlaveSclPin = Pin<Gpio5, FunctionI2C, PullUp>;
+
 
 // Convenience macro to debug over serial
 #[macro_export]
@@ -395,14 +411,27 @@ unsafe fn main() -> ! {
 
 
 
+    let slave_sda_pin: SlaveSdaPin = pins.gpio4.reconfigure();
+    let slave_scl_pin: SlaveSclPin = pins.gpio5.reconfigure();
+    
+    // Configure the second I2c two pins as being I²C, not GPIO
+    let mut i2c_slave = I2C::i2c0(
+        pac.I2C0,
+        slave_sda_pin,
+        slave_scl_pin,
+        400.kHz(),
+        &mut pac.RESETS,
+        &clocks.system_clock,
+    );
+    
     // Configure two pins as being I²C for the display and Not GPIO
-    let sda_pin: DisplaySdaPin = pins.gpio22.reconfigure();
-    let scl_pin: DisplaySclPin = pins.gpio23.reconfigure();
+    let display_sda_pin: DisplaySdaPin = pins.gpio22.reconfigure();
+    let display_scl_pin: DisplaySclPin = pins.gpio23.reconfigure();
 
     let i2c_display: DisplayI2CBus = hal::I2C::i2c1(
         pac.I2C1,
-        sda_pin,
-        scl_pin,
+        display_sda_pin,
+        display_scl_pin,
         400.kHz(),
         &mut pac.RESETS,
         &clocks.system_clock,
@@ -418,15 +447,6 @@ unsafe fn main() -> ! {
     //
     //
     
-    // Configure the second I2c two pins as being I²C, not GPIO
-    // let i2c_bus = hal::I2C::i2c0(
-    //     pac.I2C0,
-    //     pins.gpio0.into_mode::<FunctionI2C>(),
-    //     pins.gpio1.into_mode::<FunctionI2C>(),
-    //     400.kHz(),
-    //     &mut pac.RESETS,
-    //     &clocks.system_clock,
-    // );
     
     info!("TinyI2C ready");
     {
@@ -435,8 +455,38 @@ unsafe fn main() -> ! {
       led.write([color].iter().cloned()).unwrap();
     }
 
+    let mut tof = VL53L0x::new(i2c_slave).unwrap();
+    tof.set_measurement_timing_budget(200000).unwrap();
+    tof.start_continuous(0).unwrap();
+
 
     loop {
+        use smart_leds_trait::{SmartLedsWrite, RGB8};
+        const RED : RGB8 = RGB8::new(255, 0, 0);
+        const GREEN : RGB8 = RGB8::new(0, 255, 0);
+        // const ORANGE : RGB8 = RGB8::new(255, 165, 0);
+        //let l = vl.read_range_mm();
+        let mls = tof.read_range_continuous_millimeters_blocking();
+        if mls.is_ok() {
+            let l = mls.unwrap();
+            led.write([GREEN].iter().cloned()).unwrap();
+            tiny_i2c.clear();
+            tiny_i2c.display_3(format!("L: {}", l).as_str());
+        } else {
+            led.write([RED].iter().cloned()).unwrap();
+        }
+        // let ok = i2c_slave.write_read(ADDR, &query, &mut response);
+        // let ping = i2c_slave.write(ADDR, &[0x0]);
+        // if ok.is_ok() {
+        //     if response[0] == 0xee {
+        //           led.write([GREEN].iter().cloned()).unwrap();
+        //     }
+        //     else {
+        //           led.write([ORANGE].iter().cloned()).unwrap();
+        //     }
+        // } else {
+        //           led.write([RED].iter().cloned()).unwrap();
+        // }
         if !usb_dev.poll(&mut [get_serial(), &mut tiny_i2c]) {
             continue;
         }
