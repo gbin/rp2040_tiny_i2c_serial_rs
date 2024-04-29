@@ -9,22 +9,25 @@ name = "rp2040_tiny_i2c_serial_rs"
 doctest = false
 
 [dependencies]
-embedded-hal = "0.2.7"
-embedded-graphics = "0.8.1"
-rp-pico = "0.9.0"
-usb-device = { version= "0.3.2", features = ["log", "defmt"]}
-rp2040-hal = "0.10.0"
-panic-halt = "0.2.0"
 cortex-m = "0.7.7"
-cortex-m-rt = "0.7.3"
+cortex-m-rt = "0.7.4"
+rp-pico = "0.9.0"
+panic-halt = "0.2.0"
+static_cell = "2.0.0"
+embedded-graphics = "0.8.1"
+usb-device = { version= "0.3.2"}
 ssd1306 = "0.8.4"
 fugit = "0.3.7"
 heapless = "0.8.0"
-usbd-serial = "0.2.1"
-defmt = "0.3.6"
-defmt-serial = "0.8.0"
+usbd-serial = "0.2.2"
 nb = "1.1.0"
 bitflags = "2.5.0"
 ws2812-pio = "0.8.0"
-smart-leds-trait = "0.2.1"
+smart-leds-trait = "0.2.1"   # This one is MANDATORY. ws2812-pio WILL make a very weird error with 0.3.0. Guaranteed.
 vl53l0x = "0.3.1"
+portable-atomic = { version = "1.6.0", features = ["unsafe-assume-single-core"] }
+#panic-probe = { version = "0.3.1", features = [ "print-defmt" ] }
+#rp2040-hal = {version="0.10.0", features = ["defmt"]}
+panic-probe = { version = "0.3.1" }
+rp2040-hal = {version="0.10.0" }
+embedded-io = "0.6.1"

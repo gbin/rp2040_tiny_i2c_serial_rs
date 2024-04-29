@@ -1,32 +1,37 @@
 #![no_main]
 #![no_std]
 
+use panic_probe as _;
 use core::cell::UnsafeCell;
-use core::fmt::Write as _;
-use core::panic::PanicInfo;
-
+use core::fmt::Write as StdWrite;
+use embedded_io::Write as IOWrite;
 use fugit::RateExtU32;
 use heapless::String;
 
-use rp2040_hal as hal;
+// use embedded_hal::blocking::i2c::{Write as I2CWrite, WriteRead};
+// use embedded_hal::blocking::i2c::Read as I2CRead;
+
+use rp_pico as bsp;
+use bsp::entry;
+use bsp::hal as hal;
+
 use hal::I2C;
 use hal::pac::I2C1;
-use hal::gpio::{FunctionI2C, Pin, PullUp, FunctionPio0};
-use embedded_hal::blocking::i2c::{Write as I2CWrite, WriteRead};
-use embedded_hal::blocking::i2c::Read as I2CRead;
-use hal::gpio::bank0::{Gpio5, Gpio4, Gpio22, Gpio23};
+use hal::pac::UART0;
+use hal::gpio::{FunctionI2C, Pin, PullUp, PullDown, FunctionPio0, FunctionUart};
+use hal::uart::{DataBits, StopBits, UartConfig, UartPeripheral, Enabled};
+use hal::gpio::bank0::{Gpio5, Gpio4, Gpio22, Gpio23, Gpio28, Gpio29};
 use hal::pio::PIOExt;
 use hal::{clocks::init_clocks_and_plls, pac, usb::UsbBus, watchdog::Watchdog, Clock, Timer};
 use hal::{gpio::Pins, Sio};
 
-use rp_pico::entry;
 
 use usb_device::bus::UsbBusAllocator;
 use usb_device::class_prelude::*;
 use usb_device::prelude::*;
 
-use usbd_serial::embedded_io::Write as USBWrite;
-use usbd_serial::SerialPort;
+// use usbd_serial::embedded_io::Write as USBWrite;
+// use usbd_serial::SerialPort;
 
 use ws2812_pio::Ws2812;
 
@@ -42,6 +47,8 @@ use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::{prelude::*, I2CDisplayInterface, Ssd1306};
 
 use vl53l0x::VL53L0x;
+use smart_leds_trait::RGB8;
+use smart_leds_trait::SmartLedsWrite;
 
 // Type definitions to address the screen on the device.
 type DisplaySdaPin = Pin<Gpio22, FunctionI2C, PullUp>;
@@ -56,22 +63,41 @@ type Display = Ssd1306<DisplayI2CInterface, DisplaySize, DisplayMode>;
 type SlaveSdaPin = Pin<Gpio4, FunctionI2C, PullUp>;
 type SlaveSclPin = Pin<Gpio5, FunctionI2C, PullUp>;
 
+// type definitions for the uart console
+type UartTxPin = Pin<Gpio28, FunctionUart, PullDown>;
+type UartRxPin = Pin<Gpio29, FunctionUart, PullDown>;
+type UartConsole = UartPeripheral<Enabled, UART0, (UartTxPin, UartRxPin)>;
+
+
+
+static mut SERIAL_CONSOLE: UnsafeCell<Option<UartConsole>> = UnsafeCell::new(None);
 
 // Convenience macro to debug over serial
+fn get_console() -> &'static mut UartConsole {
+    unsafe {
+        // Unsafe block is needed because we're dereferencing a raw pointer
+        match SERIAL_CONSOLE.get_mut() {
+            Some(serial) => serial,
+            None => panic!("SERIAL not initialized"),
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! info {
     ($msg:expr) => {{
-        let serial = get_serial();
-        let _ = write!(serial, "{}\r\n", $msg);
-        let _ = serial.flush();
+        let console = get_console();
+        let _ = console.write_str(format!("{}\r\n", $msg).as_str());
+        let _ = console.flush();
     }};
     ($fmt:expr, $($arg:tt)*) => {{
-        let serial = get_serial();
-        let _ = write!(serial, $fmt, $($arg)*);
-        serial.write(b"\r\n").unwrap();
-        let _ = serial.flush();
+        let console = get_console();
+        let _ = console.write_str(format!($fmt, $($arg)*).as_str());
+        let _ = console.write(b"\r\n").unwrap();
+        let _ = console.flush();
     }};
 }
+
 
 macro_rules! format {
     ($fmt:expr, $($arg:tt)*) => {{
@@ -88,6 +114,7 @@ macro_rules! format {
 
 const USB_CLASS_CDC: u8 = 0x02;
 const VENDOR_ID: u16 = 0x0403;
+const PRODUCT_ID: u16 =  0xC631;
 
 bitflags::bitflags! {
     pub struct I2CFunc: u32 {
@@ -223,11 +250,11 @@ impl<'a> TinyI2C<'a> {
     }
 
     fn clear(&mut self) {
-        self.display.clear(BinaryColor::Off);
+        let _ = self.display.clear(BinaryColor::Off);
     }
 }
 
-impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
+impl<'a> UsbClass<hal::usb::UsbBus> for TinyI2C<'a> {
     // Called after a USB reset after the bus reset sequence is complete.
     fn reset(&mut self) {
         // self.display_secondary("USB reset");
@@ -291,7 +318,7 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
         };
         match (i2creq, req.value, req.index, req.length) {
             (TinyI2CRequest::GetFunc, value, _, _) => {
-                // info!("GetFunc");
+                info!("F {}", value);
                 xfer.accept(|buf| {
                     if buf.len() < 4 {
                         return Err(UsbError::BufferOverflow);
@@ -302,16 +329,14 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
                 }).expect("Errored in accepting request");
             }
             (TinyI2CRequest::GetStatus, value, _, _) => {
-                //info!("GetStatus");
-                // self.display_3(format!("S {}", value).as_str());
+                info!("S {}", value);
                 xfer.accept(|buf| {
                     buf[0] = TinyI2CStatus::AddressAck as u8;
                 Ok(1)}).expect("Errored in accepting request");
             }
             (TinyI2CRequest::IOBeginEnd, flags, addr, length) => {
-                // info!("I2C IO: addr: 0x{:02x}, len: {}, data: {:?}", value, i2c_len, i2c_data);
+                info!("I {:x} {:x} {:?}", flags, addr, length);
                 xfer.accept(|buf| {
-                    //self.display_3(format!("I {:x} {:x} {:?}", flags, addr, length).as_str());
                     buf[0] = 0x01;
                     Ok(length as usize)
                 }).expect("Errored in accepting request");
@@ -326,7 +351,7 @@ impl<'a> UsbClass<rp2040_hal::usb::UsbBus> for TinyI2C<'a> {
 const XTAL_FREQ_HZ: u32 = 12_000_000u32;
 
 static mut USB_BUS: UnsafeCell<Option<UsbBusAllocator<UsbBus>>> = UnsafeCell::new(None);
-static mut SERIAL: UnsafeCell<Option<SerialPort<UsbBus>>> = UnsafeCell::new(None);
+// static mut SERIAL: UnsafeCell<Option<SerialPort<UsbBus>>> = UnsafeCell::new(None);
 
 fn get_usb_bus() -> &'static UsbBusAllocator<UsbBus> {
     unsafe {
@@ -338,15 +363,8 @@ fn get_usb_bus() -> &'static UsbBusAllocator<UsbBus> {
     }
 }
 
-fn get_serial() -> &'static mut SerialPort<'static, UsbBus> {
-    unsafe {
-        // Unsafe block is needed because we're dereferencing a raw pointer
-        match SERIAL.get_mut() {
-            Some(serial) => serial,
-            None => panic!("SERIAL not initialized"),
-        }
-    }
-}
+
+
 #[entry]
 unsafe fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
@@ -387,7 +405,18 @@ unsafe fn main() -> ! {
         timer.count_down(),
     );
 
+    // Configure pin 28 an 20 for the serial console
+    let serial_console_tx_pin: Pin<_, FunctionUart, _> = pins.gpio28.into_function();
+    let serial_console_rx_pin: Pin<_, FunctionUart, _> = pins.gpio29.into_function();
+    let uart_pins = (
+        serial_console_tx_pin,
+        serial_console_rx_pin,
+    );
+    let mut uart = UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS).enable(UartConfig::new(115200.Hz(), DataBits::Eight, None, StopBits::One),clocks.peripheral_clock.freq()).unwrap();
+    uart.write_str("Pre-info\r\n").unwrap();
+
     unsafe {
+        // Save some global variables: TODO fix this.
         *USB_BUS.get() = Some(UsbBusAllocator::new(UsbBus::new(
             pac.USBCTRL_REGS,
             pac.USBCTRL_DPRAM,
@@ -396,14 +425,15 @@ unsafe fn main() -> ! {
             &mut pac.RESETS,
         )));
 
-        *SERIAL.get() = Some(SerialPort::new(get_usb_bus()));
+        *SERIAL_CONSOLE.get() = Some(uart);
     }
 
+    info!("TinyI2C ready");
     let strs = StringDescriptors::new(LangID::EN_US)
         .manufacturer("Guillaume Binet")
         .product("TinyI2c")
         .serial_number("1234");
-    let tiny_usb_id = UsbVidPid(0x0403, 0xC631);
+    let tiny_usb_id = UsbVidPid(VENDOR_ID, PRODUCT_ID);
     let mut usb_dev: UsbDevice<UsbBus> = UsbDeviceBuilder::new(get_usb_bus(), tiny_usb_id)
         .strings(&[strs])
         .unwrap()
@@ -415,7 +445,7 @@ unsafe fn main() -> ! {
     let slave_scl_pin: SlaveSclPin = pins.gpio5.reconfigure();
     
     // Configure the second I2c two pins as being I²C, not GPIO
-    let mut i2c_slave = I2C::i2c0(
+    let i2c_slave = I2C::i2c0(
         pac.I2C0,
         slave_sda_pin,
         slave_scl_pin,
@@ -447,24 +477,20 @@ unsafe fn main() -> ! {
     //
     //
     
-    
-    info!("TinyI2C ready");
-    {
-     use smart_leds_trait::{SmartLedsWrite, RGB8};
-     let color : RGB8 = (255, 0, 255).into();
-      led.write([color].iter().cloned()).unwrap();
-    }
+    const ORANGE : RGB8 = RGB8::new(255, 165, 0);
+    const PINK : RGB8 = RGB8::new(255, 0, 255);
+    const RED : RGB8 = RGB8::new(255, 0, 0);
+    const GREEN : RGB8 = RGB8::new(0, 255, 0);
+
+    led.write([PINK].iter().cloned()).unwrap();
 
     let mut tof = VL53L0x::new(i2c_slave).unwrap();
     tof.set_measurement_timing_budget(200000).unwrap();
     tof.start_continuous(0).unwrap();
 
+    led.write([ORANGE].iter().cloned()).unwrap();
 
     loop {
-        use smart_leds_trait::{SmartLedsWrite, RGB8};
-        const RED : RGB8 = RGB8::new(255, 0, 0);
-        const GREEN : RGB8 = RGB8::new(0, 255, 0);
-        // const ORANGE : RGB8 = RGB8::new(255, 165, 0);
         //let l = vl.read_range_mm();
         let mls = tof.read_range_continuous_millimeters_blocking();
         if mls.is_ok() {
@@ -487,14 +513,14 @@ unsafe fn main() -> ! {
         // } else {
         //           led.write([RED].iter().cloned()).unwrap();
         // }
-        if !usb_dev.poll(&mut [get_serial(), &mut tiny_i2c]) {
+        if !usb_dev.poll(&mut [/*get_serial(), */&mut tiny_i2c]) {
             continue;
         }
     }
 }
 
-#[panic_handler]
-fn panic_handler(_info: &PanicInfo) -> ! {
-     info!("Panicked ... ");
-     loop {}
- }
+// #[panic_handler]
+// fn panic_handler(info: &PanicInfo) -> ! {
+//      info!("Panicked with info: {:?} ", info);
+//      loop {}
+//  }
