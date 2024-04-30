@@ -282,19 +282,16 @@ impl<'a> UsbClass<hal::usb::UsbBus> for TinyI2C<'a> {
         };
         match (i2creq, req.value, req.index, req.length) {
             (TinyI2CRequest::SetDelay, value, _, _) => {
-                //info!("Set delay to {}", delay);
+                info!("Set delay to {}", value);
                 self.clear();
-                self.display_2(format!("Delay {}", value).as_str());
                 xfer.accept().unwrap();
             }
             (TinyI2CRequest::Echo, value, _, _) => {
-                // info!("Echo {}", data[1]);
-                self.display_2(format!("E {}", value).as_str());
+                info!("Echo {}", value);
                 xfer.accept().unwrap();
             }
             (TinyI2CRequest::IOBeginEnd, flags, addr, length) => {
-                // info!("I2C IO: addr: 0x{:02x}, len: {}, data: {:?}", value, i2c_len, i2c_data);
-                self.display_3(format!("O {:x} {:x} {:?}", flags, addr, length).as_str());
+                info!("O {:x} {:x} {:?}", flags, addr, length);
                 xfer.accept().unwrap();
             }
             _ => {}
